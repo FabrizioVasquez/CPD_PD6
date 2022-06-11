@@ -5,45 +5,57 @@
 #include <mpi.h>
 #include <algorithm>
 
-#define SIZE 9
-#define N 10
-#define DOMAIN 18
+#define SIZE 20
+#define N 50000
 using namespace std;
- 
-void bucketSort(int a[],int me, int numprocs) {
-    int i, j, k;
-    int range_per_node = N/(numprocs-1);
-    int buckets_per_node = SIZE/(numprocs-1);
-    vector<int> buckets[SIZE];
-    if(me==0){ 
-        for(i = 0; i < N; ++i){
-            buckets[a[i]/range_per_node].push_back(a[i]);
-        }
-        for(i = 1;i<numprocs;i++){
-            for(j = 0;j<buckets_per_node;j++){
-                int tamano = buckets[(i-1)*buckets_per_node+j].size();
-                MPI_Send(&tamano,1,MPI_INT,i,2*j,MPI_COMM_WORLD);
-                MPI_Send(&buckets[i*buckets_per_node+j],tamano,MPI_INT,i,2*j+1,MPI_COMM_WORLD);
 
+int findBucketIndex(float elem){
+    return (int) SIZE*elem/1000;
+}
+ 
+void bucketSort(float a[], int num_per_bucket[], int me, int numprocs) {
+    int buckets_per_node = SIZE/(numprocs-1);
+    if(me==0){
+        vector<float*> buckets(SIZE);
+        int current_index_per_bucket[SIZE];
+        for(int i = 0; i < SIZE; i++){
+            buckets[i] = new float[num_per_bucket[i]];
+            current_index_per_bucket[i] = 0;
+        }
+        for(int i = 0; i < N; i++){
+            int bucket_index = findBucketIndex(a[i]);
+            buckets[bucket_index][current_index_per_bucket[bucket_index]] = a[i];
+            current_index_per_bucket[bucket_index]++;
+        }
+
+        for(int i = 1; i < numprocs; i++){
+            for(int j = 0; j < buckets_per_node; j++){
+                int index = (i-1)*buckets_per_node+j;
+                int tamano = num_per_bucket[index];
+                MPI_Send(&tamano, 1, MPI_INT, i, 2*j, MPI_COMM_WORLD);
+                MPI_Send(buckets[index], tamano, MPI_FLOAT, i, 2*j+1, MPI_COMM_WORLD);
             }
         }
+
         int count=0;
-        for(i = 1;i<numprocs-1;i++){
-            for(j = 0;j<buckets_per_node;j++){
-                MPI_Recv(&a[count],buckets[(i-1)*buckets_per_node+j].size(),MPI_INT,i,j,MPI_COMM_WORLD,MPI_STATUS_IGNORE); 
-                count+=buckets[(i-1)*buckets_per_node+j].size();
+        
+        for(int i = 1; i < numprocs; i++){
+            for(int j = 0; j < buckets_per_node; j++){
+                int index = (i-1)*buckets_per_node+j;
+                int tamano = num_per_bucket[index];
+                MPI_Recv(&a[count], tamano, MPI_FLOAT,i,j,MPI_COMM_WORLD,MPI_STATUS_IGNORE); 
+                count += tamano;
             }
         }
     }else{
         int tamano;
-        for(j=0;j<buckets_per_node;j++){
-            MPI_Recv(&tamano,1,MPI_INT,0,2*j,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-            printf("Tamaño recibido es %d en %d\n", tamano, me);
-            int bucket[tamano];
-            MPI_Recv(&bucket,tamano,MPI_INT,0,2*j+1,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
-            sort(&bucket[0],&bucket[tamano-1]);
-            //cout<<"hola desde el proceso"<< me <<endl;
-            MPI_Send(&bucket[0],tamano,MPI_INT,0,j,MPI_COMM_WORLD);
+        for(int j = 0; j < buckets_per_node; j++){
+            MPI_Recv(&tamano, 1, MPI_INT, 0, 2*j, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            float bucket[tamano];
+            MPI_Recv(&bucket,tamano,MPI_FLOAT,0,2*j+1,MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+            if(tamano != 0)
+                sort(bucket, bucket + tamano);
+            MPI_Send(&bucket[0], tamano, MPI_FLOAT, 0, j, MPI_COMM_WORLD);
         }
     }
 
@@ -51,32 +63,42 @@ void bucketSort(int a[],int me, int numprocs) {
  
 int main(int argc, char *argv[]) {
    int me, numprocs;
-   double data[2];
    MPI_Init(&argc,&argv);
    MPI_Comm_rank(MPI_COMM_WORLD, &me);
    MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
    srand(time(NULL));
-   int i, a[long(N)], n = long(N);
+   int n = long(N);
+   int num_per_bucket[SIZE];
+   float a[n];
 
     if (me ==0){
         cout << "Before sorting:\n";
+        for(int i = 0; i < N; i++)
+            num_per_bucket[i] = 0;
+
         for(int i = 0; i<N; ++i){
-            a[i] = rand()%DOMAIN;
-            cout << a[i] << " ";
+            a[i] = (float)rand()/(float)(RAND_MAX/999.0);
+            int bucket_index = findBucketIndex(a[i]);
+            num_per_bucket[bucket_index]++;
+            cout << a[i] << ", index_bucket: " << bucket_index << " | ";
         }
-        cout << endl;            
+        cout << endl;
+        for(int i = 0; i < SIZE; i++) {
+          cout << num_per_bucket[i] << " ";
+        }
+        cout << endl;
     }
-    bucketSort(a,me,numprocs);
+    bucketSort(a, num_per_bucket, me, numprocs);
     // MPI_Barrier(MPI_COMM_WORLD);
     // if(me==0){
     //     cout<< "\n\nAfter sorting:\n";
-    //     for(i = 0; i < n; ++i){
+    //     for(int i = 0; i < n; ++i){
     //     cout<<a[i]<<" ";
     //     }
     //     //cout<<endl;
     //     cout << "Validation: " << endl;
     //     int temp = 0;
-    //     for(i = 0; i < n; ++i){
+    //     for(int i = 0; i < n; ++i){
     //         if(temp > a[i]){
     //             cout<<"wrong\n";
     //             break;
@@ -85,5 +107,5 @@ int main(int argc, char *argv[]) {
     //     }
     // }
     MPI_Finalize();
-   return 0;
+    return 0;
 }
